@@ -121,34 +121,31 @@ def main():
                 'max_line_gap': 10
             }
         
+        st.subheader("Edge Detection Parameters")
+        st.write("Adjust the parameters before analyzing the drawing.")
+        
+        # Create sliders for each parameter
+        canny_low = st.slider("Canny Low", 0, 255, st.session_state.edge_detection_params['canny_low'])
+        canny_high = st.slider("Canny High", 0, 255, st.session_state.edge_detection_params['canny_high'])
+        hough_threshold = st.slider("Hough Threshold", 0, 200, st.session_state.edge_detection_params['hough_threshold'])
+        min_line_length = st.slider("Min Line Length", 0, 200, st.session_state.edge_detection_params['min_line_length'])
+        max_line_gap = st.slider("Max Line Gap", 0, 50, st.session_state.edge_detection_params['max_line_gap'])
+        
+        # Update parameters with user adjustments
+        st.session_state.edge_detection_params = {
+            'canny_low': canny_low,
+            'canny_high': canny_high,
+            'hough_threshold': hough_threshold,
+            'min_line_length': min_line_length,
+            'max_line_gap': max_line_gap
+        }
+        
         if st.button("Analyze Drawing") and st.session_state.page_confirmed:
             with st.spinner("Analyzing..."):
-                analysis, walls, analyzed_image, suggested_params = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), st.session_state.edge_detection_params)
+                analysis, walls, analyzed_image, _ = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), st.session_state.edge_detection_params)
             
             st.subheader("General Analysis")
             st.write(analysis)
-            
-            st.subheader("Edge Detection Parameters")
-            st.write("Adjust the parameters to see real-time changes in the analyzed drawing.")
-            
-            # Create sliders for each parameter
-            canny_low = st.slider("Canny Low", 0, 255, suggested_params['canny_low'])
-            canny_high = st.slider("Canny High", 0, 255, suggested_params['canny_high'])
-            hough_threshold = st.slider("Hough Threshold", 0, 200, suggested_params['hough_threshold'])
-            min_line_length = st.slider("Min Line Length", 0, 200, suggested_params['min_line_length'])
-            max_line_gap = st.slider("Max Line Gap", 0, 50, suggested_params['max_line_gap'])
-            
-            # Update parameters with user adjustments
-            st.session_state.edge_detection_params = {
-                'canny_low': canny_low,
-                'canny_high': canny_high,
-                'hough_threshold': hough_threshold,
-                'min_line_length': min_line_length,
-                'max_line_gap': max_line_gap
-            }
-            
-            # Reanalyze in real-time as sliders are adjusted
-            _, walls, analyzed_image, _ = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), st.session_state.edge_detection_params)
             
             st.subheader("Detected Walls")
             st.write(f"Number of potential walls detected: {len(walls)}")
