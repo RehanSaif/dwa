@@ -6,8 +6,37 @@ import numpy as np
 import streamlit as st
 import io
 from PIL import Image
+from typing import Dict
 
-def analyze_architectural_drawing(uploaded_file, edge_detection_params):
+def calculate_parameters(sensitivity: float) -> Dict:
+    """
+    Convert sensitivity value (0-100) to appropriate parameter ranges.
+    Matches the React component's parameter calculations.
+    """
+    if sensitivity == 0:
+        return {
+            'canny_low': 200,      # High threshold to detect fewer edges
+            'canny_high': 300,     # High threshold to detect fewer edges  
+            'hough_threshold': 150, # More votes needed to detect a line
+            'min_line_length': 80, # Only detect longer lines
+            'max_line_gap': 3      # Small gap tolerance
+        }
+    
+    normalized = sensitivity / 100
+    
+    return {
+        'canny_low': int(80 + (1 - normalized) * 80),     # Range: 20-100
+        'canny_high': int(100 + (1 - normalized) * 100),  # Range: 100-200
+        'hough_threshold': int(20 + (1 - normalized) * 80),  # Range: 20-100
+        'min_line_length': int(10 + (1 - normalized) * 50),  # Range: 10-60
+        'max_line_gap': int(2 + normalized * 10)             # Range: 2-12
+    }
+
+def analyze_architectural_drawing(uploaded_file, sensitivity: float = 50):
+    # Calculate parameters based on sensitivity
+    print(sensitivity)
+    params = calculate_parameters(sensitivity)
+    
     # Read the image
     file_bytes = uploaded_file.getvalue()
     file_bytes = np.frombuffer(file_bytes, dtype=np.uint8)
@@ -23,7 +52,7 @@ def analyze_architectural_drawing(uploaded_file, edge_detection_params):
     thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     
     # Detect edges with user-adjusted parameters
-    edges = cv2.Canny(thresh, edge_detection_params['canny_low'], edge_detection_params['canny_high'], apertureSize=3)
+    edges = cv2.Canny(thresh, params['canny_low'], params['canny_high'], apertureSize=3)
     
     # Dilate edges to connect nearby lines, but with smaller kernel
     kernel = np.ones((2,2), np.uint8)
@@ -34,9 +63,9 @@ def analyze_architectural_drawing(uploaded_file, edge_detection_params):
         dilated,
         rho=1,
         theta=np.pi/180,
-        threshold=edge_detection_params['hough_threshold'],
-        minLineLength=edge_detection_params['min_line_length'],
-        maxLineGap=edge_detection_params['max_line_gap']
+        threshold=params['hough_threshold'],
+        minLineLength=params['min_line_length'],
+        maxLineGap=params['max_line_gap']
     )
 
     result_image = image.copy()
@@ -47,7 +76,8 @@ def analyze_architectural_drawing(uploaded_file, edge_detection_params):
             wall_coordinates.append([x1, y1, x2, y2])
             cv2.line(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    return "Analysis completed", wall_coordinates, result_image, edge_detection_params
+    print(params)
+    return "Analysis completed", wall_coordinates, result_image, params
 
 def pdf_to_images(pdf_file):
     pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
@@ -113,42 +143,27 @@ def main():
         
         # Initialize or retrieve edge_detection_params
         if 'edge_detection_params' not in st.session_state or st.session_state.edge_detection_params is None:
+            print('set parameters')
             st.session_state.edge_detection_params = {
-                'canny_low': 50,
-                'canny_high': 150,
-                'hough_threshold': 100,
-                'min_line_length': 100,
-                'max_line_gap': 10
+                'canny_low': 200,
+                'canny_high': 250,
+                'hough_threshold': 500,
+                'min_line_length': 500,
+                'max_line_gap': 30
             }
+        
+        st.subheader("Sensitivity")
+        sensitivity = st.slider("Wall Detection Sensitivity", 0, 100, 50) 
+        print(sensitivity)       
+        
         
         if st.button("Analyze Drawing") and st.session_state.page_confirmed:
             with st.spinner("Analyzing..."):
-                analysis, walls, analyzed_image, suggested_params = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), st.session_state.edge_detection_params)
-            
-            st.subheader("General Analysis")
-            st.write(analysis)
-            
-            st.subheader("Edge Detection Parameters")
-            st.write("Adjust the parameters to see real-time changes in the analyzed drawing.")
-            
-            # Create sliders for each parameter
-            canny_low = st.slider("Canny Low", 0, 255, suggested_params['canny_low'])
-            canny_high = st.slider("Canny High", 0, 255, suggested_params['canny_high'])
-            hough_threshold = st.slider("Hough Threshold", 0, 200, suggested_params['hough_threshold'])
-            min_line_length = st.slider("Min Line Length", 0, 200, suggested_params['min_line_length'])
-            max_line_gap = st.slider("Max Line Gap", 0, 50, suggested_params['max_line_gap'])
-            
-            # Update parameters with user adjustments
-            st.session_state.edge_detection_params = {
-                'canny_low': canny_low,
-                'canny_high': canny_high,
-                'hough_threshold': hough_threshold,
-                'min_line_length': min_line_length,
-                'max_line_gap': max_line_gap
-            }
-            
-            # Reanalyze in real-time as sliders are adjusted
-            _, walls, analyzed_image, _ = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), st.session_state.edge_detection_params)
+                analysis, walls, analyzed_image, suggested_params = analyze_architectural_drawing(io.BytesIO(st.session_state.img_byte_arr), sensitivity)
+                # Delete edge_detection_params from session state to reset for next analysis
+                st.session_state.edge_detection_params = None
+                st.subheader("General Analysis")
+                st.write(analysis)
             
             st.subheader("Detected Walls")
             st.write(f"Number of potential walls detected: {len(walls)}")
