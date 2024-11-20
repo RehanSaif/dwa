@@ -12,7 +12,6 @@ from PIL import Image
 
 def analyze_architectural_drawing(uploaded_file, edge_detection_params):
     # Initialize OpenAI client
-    client = OpenAI(api_key="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")
 
     # Read the image
     file_bytes = uploaded_file.getvalue()
