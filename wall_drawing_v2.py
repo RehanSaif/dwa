@@ -330,7 +330,7 @@ class WallDetectorPDF:
         return len(detected_walls)
 
 def main():
-    st.title("PDF Wall Detector")
+    st.title("DWA Wall Detector")
     
     # Initialize session state
     if 'processed_pages' not in st.session_state:
