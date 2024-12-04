@@ -61,45 +61,43 @@ class EnhancedWallDetector:
         """Parameters optimized for black line detection in architectural floor plans."""
         normalized = sensitivity / 100
         
-        # At sensitivity=0 we want more restrictive/conservative detection
-        # At sensitivity=100 we want more lenient/aggressive detection
-        base_params = {  # More restrictive (sensitivity = 0)
-            'threshold_value': 200,        # Higher threshold = less noise
-            'canny_low': 50,              # Higher low threshold = less edges
-            'canny_high': 150,            # Higher high threshold = stronger edges
-            'hough_threshold': 70,        # Higher threshold = fewer lines
-            'min_line_length': 68,        # Longer minimum = fewer short lines
-            'max_line_gap': 15,           # Smaller gap = less connecting
-            'angle_tolerance': 1.5,        # Tighter angle = more exact
-            'duplicate_tolerance': 8,      # Normal duplicate merging
-            'min_wall_thickness': 3,      # Thicker walls only
-            'outer_wall_threshold': 0.85,  # Higher threshold = fewer outer walls
-            'junction_tolerance': 10,      # Tighter junctions
-            'min_room_area': 1000,        # Larger rooms only
-            'wall_darkness_threshold': 100 # Darker walls only
+        base_params = {
+            'threshold_value': 200,
+            'canny_low': 50,
+            'canny_high': 150,
+            'hough_threshold': 70,
+            'min_line_length': 80,
+            'max_line_gap': 15,
+            'angle_tolerance': 1.5,
+            'duplicate_tolerance': 8,
+            'min_wall_thickness': 5,
+            'outer_wall_threshold': 0.85,
+            'junction_tolerance': 10,
+            'min_room_area': 1000,
+            'wall_darkness_threshold': 100
         }
         
-        max_params = {   # More lenient (sensitivity = 100)
-            'threshold_value': 160,        # Lower threshold = detect more
-            'canny_low': 20,              # Lower low threshold = more edges
-            'canny_high': 100,            # Lower high threshold = more edges
-            'hough_threshold': 40,        # Lower threshold = more lines
-            'min_line_length': 40,        # Shorter minimum = more short lines
-            'max_line_gap': 35,           # Larger gap = more connecting
-            'angle_tolerance': 3.0,        # Wider angle = more forgiving
-            'duplicate_tolerance': 12,     # More merging
-            'min_wall_thickness': 1,      # Thinner walls allowed
-            'outer_wall_threshold': 0.75,  # Lower threshold = more outer walls
-            'junction_tolerance': 15,      # More forgiving junctions
-            'min_room_area': 500,         # Smaller rooms allowed
-            'wall_darkness_threshold': 150 # Lighter walls allowed
+        max_params = {
+            'threshold_value': 180,
+            'canny_low': 30,
+            'canny_high': 120,
+            'hough_threshold': 50,
+            'min_line_length': 60,
+            'max_line_gap': 25,
+            'angle_tolerance': 3.0,
+            'duplicate_tolerance': 12,
+            'min_wall_thickness': 3,
+            'outer_wall_threshold': 0.75,
+            'junction_tolerance': 15,
+            'min_room_area': 500,
+            'wall_darkness_threshold': 150
         }
         
         params = {}
         for key in base_params:
             params[key] = base_params[key] + (max_params[key] - base_params[key]) * normalized
             if key in ['canny_low', 'canny_high', 'hough_threshold', 'min_line_length', 
-                    'max_line_gap', 'threshold_value', 'wall_darkness_threshold']:
+                      'max_line_gap', 'threshold_value', 'wall_darkness_threshold']:
                 params[key] = int(params[key])
         
         return params
@@ -559,4 +557,4 @@ def main():
                 st.button("Download Annotated PDF", disabled=True, help="Process at least one page first")
 
 if __name__ == "__main__":
-    main() 
+    main()    

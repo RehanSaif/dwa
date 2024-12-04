@@ -61,52 +61,61 @@ class EnhancedWallDetector:
         """Parameters optimized for black line detection in architectural floor plans."""
         normalized = sensitivity / 100
         
-        # At sensitivity=0 we want more restrictive/conservative detection
-        # At sensitivity=100 we want more lenient/aggressive detection
-        base_params = {  # More restrictive (sensitivity = 0)
-            'threshold_value': 200,        # Higher threshold = less noise
-            'canny_low': 50,              # Higher low threshold = less edges
-            'canny_high': 150,            # Higher high threshold = stronger edges
-            'hough_threshold': 70,        # Higher threshold = fewer lines
-            'min_line_length': 68,        # Longer minimum = fewer short lines
-            'max_line_gap': 15,           # Smaller gap = less connecting
-            'angle_tolerance': 1.5,        # Tighter angle = more exact
-            'duplicate_tolerance': 8,      # Normal duplicate merging
-            'min_wall_thickness': 3,      # Thicker walls only
-            'outer_wall_threshold': 0.85,  # Higher threshold = fewer outer walls
-            'junction_tolerance': 10,      # Tighter junctions
-            'min_room_area': 1000,        # Larger rooms only
-            'wall_darkness_threshold': 100 # Darker walls only
+        # Enhanced base parameters for black line detection
+        base_params = {
+            'threshold_value': 200,  # Higher threshold to focus on darker lines
+            'canny_low': 50,
+            'canny_high': 150,
+            'hough_threshold': 70,
+            'min_line_length': 80,
+            'max_line_gap': 15,
+            'angle_tolerance': 1.5,
+            'duplicate_tolerance': 8,
+            'min_wall_thickness': 5,
+            'outer_wall_threshold': 0.85,
+            'junction_tolerance': 10,
+            'min_room_area': 1000,
+            'wall_darkness_threshold': 100  # Lower values mean darker lines
         }
         
-        max_params = {   # More lenient (sensitivity = 100)
-            'threshold_value': 160,        # Lower threshold = detect more
-            'canny_low': 20,              # Lower low threshold = more edges
-            'canny_high': 100,            # Lower high threshold = more edges
-            'hough_threshold': 40,        # Lower threshold = more lines
-            'min_line_length': 40,        # Shorter minimum = more short lines
-            'max_line_gap': 35,           # Larger gap = more connecting
-            'angle_tolerance': 3.0,        # Wider angle = more forgiving
-            'duplicate_tolerance': 12,     # More merging
-            'min_wall_thickness': 1,      # Thinner walls allowed
-            'outer_wall_threshold': 0.75,  # Lower threshold = more outer walls
-            'junction_tolerance': 15,      # More forgiving junctions
-            'min_room_area': 500,         # Smaller rooms allowed
-            'wall_darkness_threshold': 150 # Lighter walls allowed
+        # More lenient max parameters
+        max_params = {
+            'threshold_value': 180,
+            'canny_low': 30,
+            'canny_high': 120,
+            'hough_threshold': 50,
+            'min_line_length': 60,
+            'max_line_gap': 25,
+            'angle_tolerance': 3.0,
+            'duplicate_tolerance': 12,
+            'min_wall_thickness': 3,
+            'outer_wall_threshold': 0.75,
+            'junction_tolerance': 15,
+            'min_room_area': 500,
+            'wall_darkness_threshold': 150
         }
         
         params = {}
         for key in base_params:
             params[key] = base_params[key] + (max_params[key] - base_params[key]) * normalized
             if key in ['canny_low', 'canny_high', 'hough_threshold', 'min_line_length', 
-                    'max_line_gap', 'threshold_value', 'wall_darkness_threshold']:
+                      'max_line_gap', 'threshold_value', 'wall_darkness_threshold']:
                 params[key] = int(params[key])
         
         return params
     
     def check_wall_thickness(self, img: np.ndarray, x1: float, y1: float, x2: float, y2: float, 
-                           params: dict, wall_thickness: int) -> bool:
-        """Check if line represents a wall by verifying its thickness and darkness."""
+                        params: dict, wall_thickness: int = 5) -> bool:
+        """
+        Check if line represents a wall by verifying its thickness and darkness.
+        
+        Args:
+            img: Input grayscale image
+            x1, y1: Start point coordinates
+            x2, y2: End point coordinates
+            params: Detection parameters dictionary
+            wall_thickness: Desired wall thickness in pixels
+        """
         mask = np.zeros_like(img)
         cv2.line(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, int(wall_thickness * 2))
         
@@ -116,9 +125,11 @@ class EnhancedWallDetector:
         if len(line_pixels) == 0:
             return False
         
+        # Check if the average pixel value is dark enough (black lines)
         avg_darkness = np.mean(line_pixels)
         is_dark_enough = avg_darkness < params['wall_darkness_threshold']
         
+        # Check if the line has consistent thickness
         non_zero = cv2.countNonZero(intersection)
         total = cv2.countNonZero(mask)
         
@@ -127,6 +138,8 @@ class EnhancedWallDetector:
         
         thickness_ratio = non_zero / total
         return thickness_ratio > 0.3 and is_dark_enough
+
+
 
     def detect_walls(self, page_pixmap, sensitivity: float = 50, wall_thickness: int = 5) -> List[WallLine]:
         """Enhanced wall detection focusing on black lines with configurable thickness."""
@@ -198,42 +211,6 @@ class EnhancedWallDetector:
             walls = self.enhance_wall_classification(walls)
         
         return walls
-
-    def preview_detection(self, page_pixmap, sensitivity: float = 50, wall_thickness: int = 5):
-        """Enhanced preview with room detection visualization."""
-        img = np.frombuffer(page_pixmap.samples, dtype=np.uint8).reshape(
-            page_pixmap.height, page_pixmap.width, page_pixmap.n
-        )
-        
-        if page_pixmap.n == 4:
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-        
-        preview_img = img.copy()
-        walls = self.detect_walls(page_pixmap, sensitivity, wall_thickness)
-        
-        # Draw walls
-        for wall in walls:
-            if wall.wall_type == "EXTERIOR_WALL":
-                color = self.OUTER_WALL_COLOR
-            elif wall.wall_type == "PARTITION_WALL":
-                color = self.PARTITION_WALL_COLOR
-            else:
-                color = self.INNER_WALL_COLOR
-                
-            start_point = (int(wall.start[0]), int(wall.start[1]))
-            end_point = (int(wall.end[0]), int(wall.end[1]))
-            cv2.line(preview_img, start_point, end_point, color, wall_thickness)
-        
-        # Draw junction points
-        for junction in self.junction_points:
-            cv2.circle(preview_img, (int(junction[0]), int(junction[1])), 5, (0, 0, 255), -1)
-        
-        # Draw room boundaries
-        for room in self.room_boundaries:
-            points = np.array(room, dtype=np.int32)
-            cv2.polylines(preview_img, [points], True, (255, 165, 0), 2)
-        
-        return preview_img, len(walls)
     
 
     def detect_junctions(self, walls: List[WallLine], tolerance: float = 10) -> List[Tuple[float, float]]:
@@ -429,6 +406,41 @@ class EnhancedWallDetector:
         return (point_match(line1[0], line2[0]) and point_match(line1[1], line2[1])) or \
                (point_match(line1[0], line2[1]) and point_match(line1[1], line2[0]))
 
+    def preview_detection(self, page_pixmap, sensitivity: float = 50, wall_thickness: int = 5):
+        """Enhanced preview with room detection visualization."""
+        img = np.frombuffer(page_pixmap.samples, dtype=np.uint8).reshape(
+            page_pixmap.height, page_pixmap.width, page_pixmap.n
+        )
+        
+        if page_pixmap.n == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+        
+        preview_img = img.copy()
+        walls = self.detect_walls(page_pixmap, sensitivity, wall_thickness)
+        
+        # Draw walls
+        for wall in walls:
+            if wall.wall_type == "EXTERIOR_WALL":
+                color = self.OUTER_WALL_COLOR
+            elif wall.wall_type == "PARTITION_WALL":
+                color = self.PARTITION_WALL_COLOR
+            else:
+                color = self.INNER_WALL_COLOR
+                
+            start_point = (int(wall.start[0]), int(wall.start[1]))
+            end_point = (int(wall.end[0]), int(wall.end[1]))
+            cv2.line(preview_img, start_point, end_point, color, wall_thickness)
+        
+        # Draw junction points
+        for junction in self.junction_points:
+            cv2.circle(preview_img, (int(junction[0]), int(junction[1])), 5, (0, 0, 255), -1)
+        
+        # Draw room boundaries
+        for room in self.room_boundaries:
+            points = np.array(room, dtype=np.int32)
+            cv2.polylines(preview_img, [points], True, (255, 165, 0), 2)
+        
+        return preview_img, len(walls)
 
     def process_page(self, pdf_document, page_number: int, sensitivity: float = 50):
         """Process a single page and add wall annotations."""
@@ -559,4 +571,4 @@ def main():
                 st.button("Download Annotated PDF", disabled=True, help="Process at least one page first")
 
 if __name__ == "__main__":
-    main() 
+    main()    
