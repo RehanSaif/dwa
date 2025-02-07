@@ -29,6 +29,7 @@ class Wall:
     wall_type: str = "standard"
 
 def detect_walls(pix, kernel=3, opening_iter=3, dilate_iter=3, approx_accuracy=0.001):
+    # Convert input image
     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
         pix.height, pix.width, pix.n
     )
@@ -39,37 +40,64 @@ def detect_walls(pix, kernel=3, opening_iter=3, dilate_iter=3, approx_accuracy=0
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     
     gray = img
-    # create wall image (filter out small objects from image)
     wall_img = wall_filter(gray, kernel, opening_iter, dilate_iter)
-    # detect walls
     boxes, img = detectPreciseBoxes(wall_img, wall_img, approx_accuracy)
     
-    # Scale pixel value to 3d pos
-    scale = 100
+    height, width = img.shape[0], img.shape[1]
+    walls_plan = []
 
-    # Create top walls verts
+    # Create three separate views of identical size
+    original_view = cv2.cvtColor(wall_img, cv2.COLOR_GRAY2BGR)
+    analysis_view = np.zeros((height, width, 3), dtype=np.uint8)
+    clean_wall_view = np.ones((height, width, 3), dtype=np.uint8) * 255
+    
+    # Convert vertices to wall segments
     verts = []
     for box in boxes:
-        verts.extend([scale_point_to_vector(box, scale, 0)])
-
-    height, width = img.shape[0], img.shape[1]
-    result_image = np.zeros((height, width, 3), np.uint8)
-    walls_plan_for_xml_generator = []
-
+        verts.extend([scale_point_to_vector(box, 100, 0)])
+        
     for room in verts:
         for i in range(len(room) - 1):
             line = (int(room[i][0] * width / 100), int(room[i][1] * height / 100)), \
                    (int(room[i + 1][0] * width / 100), int(room[i + 1][1] * height / 100))
-            walls_plan_for_xml_generator.append(line)
-            cv2.line(result_image, line[0], line[1], (255, 255, 0), 2)  # Increased line thickness for visibility
-
-    # Convert to RGB for better visualization
-    wall_img_rgb = cv2.cvtColor(wall_img, cv2.COLOR_GRAY2RGB)
+            walls_plan.append(line)
+            # Draw original endpoints with thicker points
+            cv2.circle(analysis_view, line[0], 5, (255, 0, 0), -1)  # Blue dot
+            cv2.circle(analysis_view, line[1], 5, (0, 255, 0), -1)  # Green dot
+            # Draw original wall segment in white
+            cv2.line(analysis_view, line[0], line[1], (255, 255, 255), 2)
     
-    # Combine the original filtered image with detected walls
-    combined_img = cv2.addWeighted(wall_img_rgb, 0.7, result_image, 0.3, 0)
+    # Get merged walls
+    merged_walls = merge_nearby_walls(walls_plan, 
+                                    distance_threshold=3, 
+                                    angle_threshold=5)
     
-    return combined_img, walls_plan_for_xml_generator
+    # Draw merged walls with thicker lines
+    for wall in merged_walls:
+        p1 = (int(wall[0][0]), int(wall[0][1]))
+        p2 = (int(wall[1][0]), int(wall[1][1]))
+        cv2.line(analysis_view, p1, p2, (0, 0, 255), 3)  # Red lines
+        cv2.circle(analysis_view, p1, 6, (255, 0, 255), -1)  # Magenta dot
+        cv2.circle(analysis_view, p2, 6, (255, 255, 0), -1)  # Yellow dot
+        # Draw on clean view (just the walls)
+        cv2.line(clean_wall_view, p1, p2, (0, 0, 0), 2)  # Black lines
+    
+    # Create padding (black bars between images)
+    padding = np.zeros((height, 20, 3), dtype=np.uint8)
+    
+    # Calculate the target width for each image (1/3 of the final width, accounting for padding)
+    target_width = width
+    target_height = height
+    
+    # Resize all images to the same dimensions
+    original_view = cv2.resize(original_view, (target_width, target_height))
+    analysis_view = cv2.resize(analysis_view, (target_width, target_height))
+    clean_wall_view = cv2.resize(clean_wall_view, (target_width, target_height))
+    
+    # Stack all views horizontally with padding
+    combined_view = np.hstack((original_view, padding, analysis_view, padding, clean_wall_view))
+    
+    return combined_view, merged_walls, len(walls_plan)
 
 def process_page(pdf_document, page_number: int, kernel, opening_iter, dilate_iter, accuracy):
     """Process a single page and add wall annotations."""
@@ -77,7 +105,7 @@ def process_page(pdf_document, page_number: int, kernel, opening_iter, dilate_it
     page_rect = page.rect
     pix = page.get_pixmap()
     
-    # Get wall detection results
+    # Get wall detection results with merged walls
     _, wall_coords = detect_walls(pix, kernel, opening_iter, dilate_iter, accuracy)
     
     # Convert coordinates to Wall objects
@@ -122,6 +150,126 @@ def add_wall_annotation(page, start_point, end_point, wall_type):
         
         annot.set_flags(PRINT_FLAG)
         annot.update()
+def create_clean_wall_view(walls, height, width):
+    """
+    Create a clean visualization with just the merged walls, no dots
+    """
+    # Create a white background
+    clean_view = np.ones((height, width, 3), dtype=np.uint8) * 255
+    
+    # Draw merged walls with black lines
+    for wall in walls:
+        p1 = (int(wall[0][0]), int(wall[0][1]))
+        p2 = (int(wall[1][0]), int(wall[1][1]))
+        cv2.line(clean_view, p1, p2, (0, 0, 0), 2)  # Black lines with thickness 2
+    
+    return clean_view
+
+def merge_nearby_walls(wall_coords, distance_threshold=5, angle_threshold=10):
+    """
+    Merge walls that are likely duplicates based on proximity, angle, and overlap
+    """
+    def point_distance(p1, p2):
+        return np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+    
+    def line_length(line):
+        return point_distance(line[0], line[1])
+    
+    def get_line_angle(line):
+        dx = line[1][0] - line[0][0]
+        dy = line[1][1] - line[0][1]
+        angle = np.degrees(np.arctan2(dy, dx)) % 180
+        return angle
+    
+    def are_parallel(angle1, angle2, threshold):
+        diff = abs(angle1 - angle2) % 180
+        return min(diff, 180 - diff) < threshold
+    
+    def segments_overlap(line1, line2):
+        """Check if two line segments overlap or are very close to overlapping"""
+        # Convert lines to directional vectors
+        v1 = np.array([line1[1][0] - line1[0][0], line1[1][1] - line1[0][1]])
+        v2 = np.array([line2[1][0] - line2[0][0], line2[1][1] - line2[0][1]])
+        
+        # Project endpoints of line2 onto line1
+        p1 = np.array(line1[0])
+        proj_start = np.dot(np.array(line2[0]) - p1, v1) / np.dot(v1, v1)
+        proj_end = np.dot(np.array(line2[1]) - p1, v1) / np.dot(v1, v1)
+        
+        # Check if projections overlap with line1 segment
+        overlap = (min(proj_start, proj_end) <= 1 and max(proj_start, proj_end) >= 0) or \
+                 (min(proj_start, proj_end) >= 0 and max(proj_start, proj_end) <= 1)
+        
+        if overlap:
+            # Calculate perpendicular distance
+            n1 = np.array([-v1[1], v1[0]]) / np.linalg.norm(v1)
+            d1 = abs(np.dot(np.array(line2[0]) - p1, n1))
+            d2 = abs(np.dot(np.array(line2[1]) - p1, n1))
+            return max(d1, d2) < distance_threshold
+        return False
+    
+    def merge_overlapping_lines(lines):
+        if not lines:
+            return None
+        
+        # Get all endpoints
+        points = []
+        for line in lines:
+            points.extend([np.array(line[0]), np.array(line[1])])
+        
+        # Find principal direction using PCA
+        points_array = np.array(points)
+        mean = np.mean(points_array, axis=0)
+        centered = points_array - mean
+        u, s, vh = np.linalg.svd(centered)
+        direction = vh[0]
+        
+        # Project all points onto principal direction
+        projections = np.dot(centered, direction)
+        
+        # Get extreme points in projection direction
+        min_idx = np.argmin(projections)
+        max_idx = np.argmax(projections)
+        
+        # Return new line from extreme points
+        start = tuple(map(int, points_array[min_idx]))
+        end = tuple(map(int, points_array[max_idx]))
+        return (start, end)
+    
+    merged_walls = []
+    used_walls = set()
+    
+    # Filter out very short walls (likely noise)
+    min_length = distance_threshold * 2
+    wall_coords = [wall for wall in wall_coords if line_length(wall) > min_length]
+    
+    # Sort walls by length, process longer walls first
+    wall_coords = sorted(wall_coords, key=line_length, reverse=True)
+    
+    for i, wall1 in enumerate(wall_coords):
+        if i in used_walls:
+            continue
+            
+        current_group = [wall1]
+        used_walls.add(i)
+        angle1 = get_line_angle(wall1)
+        
+        for j, wall2 in enumerate(wall_coords):
+            if j in used_walls:
+                continue
+                
+            angle2 = get_line_angle(wall2)
+            if are_parallel(angle1, angle2, angle_threshold):
+                if segments_overlap(wall1, wall2):
+                    current_group.append(wall2)
+                    used_walls.add(j)
+        
+        if current_group:
+            merged_wall = merge_overlapping_lines(current_group)
+            if merged_wall:
+                merged_walls.append(merged_wall)
+    
+    return merged_walls
 
 def create_page_preview(pdf_document):
     """Create preview thumbnails for all pages in the PDF with checkboxes"""
@@ -151,27 +299,12 @@ def create_preview_carousel(pdf_document, kernel, opening_iter, dilate_iter, acc
             for i in range(len(pdf_document))
         }
     
-    # Check if parameters have changed
-    current_param_hash = f"{kernel}{opening_iter}{dilate_iter}{accuracy}"
-    params_changed = ('param_hash' not in st.session_state or 
-                     st.session_state.param_hash != current_param_hash)
-    
-    # Initialize or update preview cache
-    if 'preview_cache' not in st.session_state:
-        st.session_state.preview_cache = {}
-    
-    if params_changed:
-        # Only clear cache, don't regenerate yet
-        st.session_state.preview_cache = {}
-        st.session_state.param_hash = current_param_hash
-    
     # Page controls
     cols_control = st.columns(6)
     for idx in range(len(pdf_document)):
         with cols_control[idx % 6]:
             col1, col2 = st.columns([3, 1])
             with col1:
-                # Only show selection checkbox if page isn't removed
                 if st.session_state.page_states[idx]['show_preview']:
                     selected = st.checkbox(f"Page {idx + 1}", 
                                         key=f"select_{idx}",
@@ -180,15 +313,14 @@ def create_preview_carousel(pdf_document, kernel, opening_iter, dilate_iter, acc
             with col2:
                 if st.button('✕', key=f"remove_{idx}", help="Remove from preview"):
                     st.session_state.page_states[idx]['show_preview'] = False
-                    if str(idx) in st.session_state.preview_cache:  # Convert to string for key
+                    if str(idx) in st.session_state.preview_cache:
                         del st.session_state.preview_cache[str(idx)]
                     st.rerun()
     
     # Show preview section
     st.write("### Wall Detection Preview")
-    preview_cols = st.columns(3)
     
-    # Get list of pages that should be shown
+    # Generate previews for visible pages
     visible_pages = [idx for idx in range(len(pdf_document)) 
                     if st.session_state.page_states[idx]['show_preview']]
     
@@ -202,33 +334,44 @@ def create_preview_carousel(pdf_document, kernel, opening_iter, dilate_iter, acc
             st.session_state.preview_cache = {}
             st.rerun()
         return
-    
-    # Generate previews only for visible pages that aren't in cache
-    pages_to_process = [idx for idx in visible_pages 
-                       if str(idx) not in st.session_state.preview_cache]  # Convert to string for comparison
-    
-    if pages_to_process:
-        progress_bar = st.progress(0)
-        for i, idx in enumerate(pages_to_process):
-            page = pdf_document[idx]
-            pix = page.get_pixmap()
-            preview_img, wall_coords = detect_walls(pix, kernel, opening_iter, dilate_iter, accuracy)
-            st.session_state.preview_cache[str(idx)] = preview_img  # Store with string key
-            progress_bar.progress((i + 1) / len(pages_to_process))
-        progress_bar.empty()
-    
-    # Display previews
-    for i, idx in enumerate(visible_pages):
-        col_idx = i % 3
-        with preview_cols[col_idx]:
-            preview_img = st.session_state.preview_cache[str(idx)]  # Use string key
-            status = st.session_state.page_states[idx]['status']
-            status_color = "🟢" if status == 'selected' else "🔵"
-            st.image(preview_img, 
-                    caption=f"{status_color} Page {idx + 1} ({status})", 
-                    use_column_width=True)
+
+    # Process pages and display full-width previews
+    for idx in visible_pages:
+        page = pdf_document[idx]
+        # Increase resolution of the pixmap
+        pix = page.get_pixmap(matrix=fitz.Matrix(4, 4))  # Higher resolution for better quality
         
-        if col_idx == 2 and i < len(visible_pages) - 1:
+        # Get visualization and wall counts
+        combined_view, merged_walls, original_count = detect_walls(
+            pix, kernel, opening_iter, dilate_iter, accuracy
+        )
+        
+        # Calculate scaling to maintain aspect ratio while fitting screen width
+        max_display_width = 1200  # Maximum width for display
+        scale_factor = max_display_width / combined_view.shape[1]
+        display_height = int(combined_view.shape[0] * scale_factor)
+        
+        # Resize the combined view while maintaining aspect ratio
+        combined_view_resized = cv2.resize(combined_view, 
+                                         (max_display_width, display_height), 
+                                         interpolation=cv2.INTER_AREA)
+        
+        status = st.session_state.page_states[idx]['status']
+        status_color = "🟢" if status == 'selected' else "🔵"
+        
+        # Create a container for the preview
+        with st.container():
+            st.write(f"#### Page {idx + 1} Wall Analysis")
+            st.write(f"Found {len(merged_walls)} merged walls from {original_count} detected segments")
+            
+            # Convert BGR to RGB for Streamlit display
+            combined_view_rgb = cv2.cvtColor(combined_view_resized, cv2.COLOR_BGR2RGB)
+            
+            # Display the image with fixed width and proper aspect ratio
+            st.image(combined_view_rgb, 
+                    caption=f"{status_color} Original | Analysis | Clean Walls", 
+                    use_column_width=True)
+            
             st.write("---")
 
 def process_selected_pages(pdf_document, kernel, opening_iter, dilate_iter, accuracy):
