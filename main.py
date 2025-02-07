@@ -46,10 +46,17 @@ def detect_walls(pix, kernel=3, opening_iter=3, dilate_iter=3, approx_accuracy=0
     height, width = img.shape[0], img.shape[1]
     walls_plan = []
 
-    # Create three separate views of identical size
-    original_view = cv2.cvtColor(wall_img, cv2.COLOR_GRAY2BGR)
-    analysis_view = np.zeros((height, width, 3), dtype=np.uint8)
-    clean_wall_view = np.ones((height, width, 3), dtype=np.uint8) * 255
+    # Keep original image for background
+    original_img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+        pix.height, pix.width, pix.n
+    )
+    if pix.n == 4:
+        original_img = cv2.cvtColor(original_img, cv2.COLOR_RGBA2BGR)
+    elif pix.n == 3:
+        original_img = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
+    
+    # Create overlay for walls
+    overlay = original_img.copy()
     
     # Convert vertices to wall segments
     verts = []
@@ -61,43 +68,26 @@ def detect_walls(pix, kernel=3, opening_iter=3, dilate_iter=3, approx_accuracy=0
             line = (int(room[i][0] * width / 100), int(room[i][1] * height / 100)), \
                    (int(room[i + 1][0] * width / 100), int(room[i + 1][1] * height / 100))
             walls_plan.append(line)
-            # Draw original endpoints with thicker points
-            cv2.circle(analysis_view, line[0], 5, (255, 0, 0), -1)  # Blue dot
-            cv2.circle(analysis_view, line[1], 5, (0, 255, 0), -1)  # Green dot
-            # Draw original wall segment in white
-            cv2.line(analysis_view, line[0], line[1], (255, 255, 255), 2)
     
     # Get merged walls
     merged_walls = merge_nearby_walls(walls_plan, 
                                     distance_threshold=3, 
                                     angle_threshold=5)
     
-    # Draw merged walls with thicker lines
+    # Draw merged walls with semi-transparent overlay
+    alpha = 0.7  # Transparency factor
+    
+    # Draw merged walls
     for wall in merged_walls:
         p1 = (int(wall[0][0]), int(wall[0][1]))
         p2 = (int(wall[1][0]), int(wall[1][1]))
-        cv2.line(analysis_view, p1, p2, (0, 0, 255), 3)  # Red lines
-        cv2.circle(analysis_view, p1, 6, (255, 0, 255), -1)  # Magenta dot
-        cv2.circle(analysis_view, p2, 6, (255, 255, 0), -1)  # Yellow dot
-        # Draw on clean view (just the walls)
-        cv2.line(clean_wall_view, p1, p2, (0, 0, 0), 2)  # Black lines
+        # Draw thicker lines in a bright color
+        cv2.line(overlay, p1, p2, (0, 255, 0), 3)  # Green lines
     
-    # Create padding (black bars between images)
-    padding = np.zeros((height, 20, 3), dtype=np.uint8)
+    # Blend the overlay with the original image
+    final_image = cv2.addWeighted(overlay, alpha, original_img, 1 - alpha, 0)
     
-    # Calculate the target width for each image (1/3 of the final width, accounting for padding)
-    target_width = width
-    target_height = height
-    
-    # Resize all images to the same dimensions
-    original_view = cv2.resize(original_view, (target_width, target_height))
-    analysis_view = cv2.resize(analysis_view, (target_width, target_height))
-    clean_wall_view = cv2.resize(clean_wall_view, (target_width, target_height))
-    
-    # Stack all views horizontally with padding
-    combined_view = np.hstack((original_view, padding, analysis_view, padding, clean_wall_view))
-    
-    return combined_view, merged_walls, len(walls_plan)
+    return final_image, merged_walls, len(walls_plan)
 
 def process_page(pdf_document, page_number: int, kernel, opening_iter, dilate_iter, accuracy):
     """Process a single page and add wall annotations."""
@@ -338,21 +328,21 @@ def create_preview_carousel(pdf_document, kernel, opening_iter, dilate_iter, acc
     # Process pages and display full-width previews
     for idx in visible_pages:
         page = pdf_document[idx]
-        # Increase resolution of the pixmap
-        pix = page.get_pixmap(matrix=fitz.Matrix(4, 4))  # Higher resolution for better quality
+        # Increase resolution of the pixmap for better quality
+        pix = page.get_pixmap(matrix=fitz.Matrix(4, 4))
         
         # Get visualization and wall counts
-        combined_view, merged_walls, original_count = detect_walls(
+        visualization, merged_walls, original_count = detect_walls(
             pix, kernel, opening_iter, dilate_iter, accuracy
         )
         
         # Calculate scaling to maintain aspect ratio while fitting screen width
         max_display_width = 1200  # Maximum width for display
-        scale_factor = max_display_width / combined_view.shape[1]
-        display_height = int(combined_view.shape[0] * scale_factor)
+        scale_factor = max_display_width / visualization.shape[1]
+        display_height = int(visualization.shape[0] * scale_factor)
         
-        # Resize the combined view while maintaining aspect ratio
-        combined_view_resized = cv2.resize(combined_view, 
+        # Resize the visualization while maintaining aspect ratio
+        visualization_resized = cv2.resize(visualization, 
                                          (max_display_width, display_height), 
                                          interpolation=cv2.INTER_AREA)
         
@@ -365,11 +355,11 @@ def create_preview_carousel(pdf_document, kernel, opening_iter, dilate_iter, acc
             st.write(f"Found {len(merged_walls)} merged walls from {original_count} detected segments")
             
             # Convert BGR to RGB for Streamlit display
-            combined_view_rgb = cv2.cvtColor(combined_view_resized, cv2.COLOR_BGR2RGB)
+            visualization_rgb = cv2.cvtColor(visualization_resized, cv2.COLOR_BGR2RGB)
             
             # Display the image with fixed width and proper aspect ratio
-            st.image(combined_view_rgb, 
-                    caption=f"{status_color} Original | Analysis | Clean Walls", 
+            st.image(visualization_rgb, 
+                    caption=f"{status_color} Detected Walls", 
                     use_column_width=True)
             
             st.write("---")
